@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ type fakeStartOps struct {
 	respawnErr error
 
 	isSessionRunningResult     *bool
-	isRuntimeRunningResult     bool
+	isRuntimeRunningResult     *bool
 	killErr                    error
 	waitCommandErr             error
 	acceptStartupDialogsErr    error
@@ -119,7 +120,10 @@ func (f *fakeStartOps) isRuntimeRunning(name string, processNames []string) bool
 		name:         name,
 		processNames: processNames,
 	})
-	return f.isRuntimeRunningResult
+	if f.isRuntimeRunningResult == nil {
+		return true
+	}
+	return *f.isRuntimeRunningResult
 }
 
 func (f *fakeStartOps) killSession(name string) error {
@@ -405,6 +409,7 @@ func TestDoStartSession_FullSequence(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 
 	// Verify createSession got full config.
@@ -741,6 +746,30 @@ func TestDoStartSession_FinalDeadPaneReportsProviderCrash(t *testing.T) {
 	})
 }
 
+func TestDoStartSession_LivePaneWithoutAgentFails(t *testing.T) {
+	ops := &fakeStartOps{
+		hasSessionResult:       true,
+		isRuntimeRunningResult: boolPtr(false),
+		capturePaneText:        "shell prompt after agent launch failed",
+		recordStartCrashPath:   "/runtime/sessions/triager/start-stderr.log",
+	}
+	cfg := runtime.Config{
+		Command:           "codex",
+		ProcessNames:      []string{"codex", "codex-raw"},
+		ReadyPromptPrefix: "› ",
+	}
+
+	err := doStartSession(context.Background(), ops, "triager", cfg, DefaultConfig().SetupTimeout)
+	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
+		t.Fatalf("error = %v, want startup failure", err)
+	}
+	for _, want := range []string{"agent process not running", "shell prompt after agent launch failed", "/runtime/sessions/triager/start-stderr.log"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want %q", err, want)
+		}
+	}
+}
+
 func TestDoStartSession_FinalDeadPaneCaptureErrorFallsBack(t *testing.T) {
 	running := false
 	ops := &fakeStartOps{
@@ -870,10 +899,13 @@ func TestDoStartSession_ProcessNamesOnly(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 
-	// Verify isRuntimeRunning sees the process names in zombie detection path.
-	// (Here create succeeded, so isRuntimeRunning isn't called.)
+	// A surviving pane must also contain the configured agent process.
+	if got := ops.calls[len(ops.calls)-1].processNames; !slices.Equal(got, cfg.ProcessNames) {
+		t.Fatalf("isRuntimeRunning process names = %v, want %v", got, cfg.ProcessNames)
+	}
 }
 
 func TestDoStartSession_KimiSkipsStartupDialogAcceptance(t *testing.T) {
@@ -902,6 +934,7 @@ func TestDoStartSession_KimiSkipsStartupDialogAcceptance(t *testing.T) {
 		"waitForReady",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 }
 
@@ -1119,7 +1152,30 @@ func TestDoStartSession_TreatsDeadlineAfterReadyAsSuccessWhenSessionAlive(t *tes
 		"waitForReady",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
+}
+
+func TestDoStartSession_ReadyDeadlineWithoutAgentFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	ops := &fakeStartOps{
+		hasSessionResult:       true,
+		isRuntimeRunningResult: boolPtr(false),
+		waitReadyHook: func() {
+			<-ctx.Done()
+		},
+	}
+	cfg := runtime.Config{
+		Command:           "codex",
+		ProcessNames:      []string{"codex", "codex-raw"},
+		ReadyPromptPrefix: "› ",
+	}
+
+	err := doStartSession(ctx, ops, "triager", cfg, DefaultConfig().SetupTimeout)
+	if !errors.Is(err, runtime.ErrSessionDiedDuringStartup) {
+		t.Fatalf("error = %v, want startup failure", err)
+	}
 }
 
 func TestDoStartSession_TreatsDeadlineAfterPostReadyAsSuccessWhenSessionAlive(t *testing.T) {
@@ -1160,6 +1216,7 @@ func TestDoStartSession_TreatsDeadlineAfterPostReadyAsSuccessWhenSessionAlive(t 
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 }
 
@@ -1218,6 +1275,7 @@ func TestDoStartSession_ProcessNamesAndReadyPrefix(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 }
 
@@ -1248,6 +1306,7 @@ func TestDoStartSession_CursorReadinessHintsTriggerRuntimeWait(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 
 	wfr := ops.calls[5]
@@ -1288,6 +1347,7 @@ func TestDoStartSession_ProcessNamesAndReadyDelayRechecksDialogs(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 }
 
@@ -1404,6 +1464,7 @@ func TestDoStartSession_SessionSetupRunsAfterAlive(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 		"runSetupCommand",
 		"runSetupCommand",
 	})
@@ -1452,6 +1513,7 @@ func TestDoStartSession_SessionSetupScriptRunsAfterCommands(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession",
 		"isSessionRunning",
+		"isRuntimeRunning",
 		"runSetupCommand",
 		"runSetupCommand",
 		"sendKeys",
@@ -1921,6 +1983,7 @@ func TestDoRelaunchSession_RespawnsThenOrchestrates(t *testing.T) {
 		"acceptStartupDialogs",
 		"hasSession", // step 5: verify survived
 		"isSessionRunning",
+		"isRuntimeRunning",
 	})
 
 	respawn := callsByMethod(t, ops, "respawnAgent", 1)[0]
@@ -2043,7 +2106,7 @@ func TestEnsureFreshSession_ZombieDetection(t *testing.T) {
 	ops := &fakeStartOps{
 		isSessionRunningResult: &running,
 		createErrs:             []error{ErrSessionExists},
-		isRuntimeRunningResult: false, // zombie
+		isRuntimeRunningResult: boolPtr(false), // zombie
 	}
 
 	cfg := runtime.Config{
@@ -2086,7 +2149,7 @@ func TestEnsureFreshSession_HealthyExisting(t *testing.T) {
 	ops := &fakeStartOps{
 		isSessionRunningResult: &running,
 		createErrs:             []error{ErrSessionExists},
-		isRuntimeRunningResult: true, // alive
+		isRuntimeRunningResult: boolPtr(true), // alive
 	}
 
 	err := ensureFreshSession(ops, "test", runtime.Config{
@@ -2153,7 +2216,7 @@ func TestEnsureFreshSession_ZombieKillFails(t *testing.T) {
 	ops := &fakeStartOps{
 		isSessionRunningResult: &running,
 		createErrs:             []error{ErrSessionExists},
-		isRuntimeRunningResult: false, // zombie
+		isRuntimeRunningResult: boolPtr(false), // zombie
 		killErr:                errors.New("permission denied"),
 	}
 
@@ -2175,7 +2238,7 @@ func TestEnsureFreshSession_RecreateRace(t *testing.T) {
 	ops := &fakeStartOps{
 		isSessionRunningResult: &running,
 		createErrs:             []error{ErrSessionExists, ErrSessionExists},
-		isRuntimeRunningResult: false, // zombie
+		isRuntimeRunningResult: boolPtr(false), // zombie
 	}
 
 	err := ensureFreshSession(ops, "test", runtime.Config{
@@ -2192,7 +2255,7 @@ func TestEnsureFreshSession_RecreateFails(t *testing.T) {
 	ops := &fakeStartOps{
 		isSessionRunningResult: &running,
 		createErrs:             []error{ErrSessionExists, errors.New("out of memory")},
-		isRuntimeRunningResult: false, // zombie
+		isRuntimeRunningResult: boolPtr(false), // zombie
 	}
 
 	err := ensureFreshSession(ops, "test", runtime.Config{
@@ -2495,7 +2558,7 @@ func TestEnsureFreshSession_RecreateRaceRemovesUnusedPromptFile(t *testing.T) {
 	ops := &fakeStartOps{
 		isSessionRunningResult: &running,
 		createErrs:             []error{ErrSessionExists, ErrSessionExists},
-		isRuntimeRunningResult: false,
+		isRuntimeRunningResult: boolPtr(false),
 	}
 
 	cfg := runtime.Config{

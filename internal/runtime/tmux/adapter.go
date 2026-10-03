@@ -1044,7 +1044,7 @@ func startupReadyProbeTimeout(cfg runtime.Config) time.Duration {
 	return timeout
 }
 
-func ignoreDeadlineIfSessionAlive(ops startOps, name string, err error) error {
+func ignoreDeadlineIfSessionAlive(ops startOps, name string, processNames []string, err error) error {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
@@ -1053,6 +1053,9 @@ func ignoreDeadlineIfSessionAlive(ops startOps, name string, err error) error {
 		return fmt.Errorf("verifying session after ready deadline: %w", hasErr)
 	}
 	if alive && ops.isSessionRunning(name) {
+		if len(processNames) > 0 && !ops.isRuntimeRunning(name, processNames) {
+			return startupMissingAgentError(ops, name)
+		}
 		return nil
 	}
 	if alive {
@@ -1062,6 +1065,14 @@ func ignoreDeadlineIfSessionAlive(ops startOps, name string, err error) error {
 }
 
 func startupDeadSessionError(ops startOps, name string) error {
+	return startupProcessFailureError(ops, name, fmt.Sprintf("session %q", name))
+}
+
+func startupMissingAgentError(ops startOps, name string) error {
+	return startupProcessFailureError(ops, name, fmt.Sprintf("agent process not running in session %q", name))
+}
+
+func startupProcessFailureError(ops startOps, name, description string) error {
 	pane, err := ops.capturePane(name, startupPaneCaptureLines)
 	if err != nil {
 		pane = ""
@@ -1075,16 +1086,16 @@ func startupDeadSessionError(ops startOps, name string) error {
 	diagPath := ops.recordStartCrash(name, pane)
 	switch {
 	case pane != "" && diagPath != "":
-		return fmt.Errorf("%w: session %q; diagnostic written to %s; last pane output:\n%s",
-			runtime.ErrSessionDiedDuringStartup, name, diagPath, pane)
+		return fmt.Errorf("%w: %s; diagnostic written to %s; last pane output:\n%s",
+			runtime.ErrSessionDiedDuringStartup, description, diagPath, pane)
 	case pane != "":
-		return fmt.Errorf("%w: session %q; last pane output:\n%s",
-			runtime.ErrSessionDiedDuringStartup, name, pane)
+		return fmt.Errorf("%w: %s; last pane output:\n%s",
+			runtime.ErrSessionDiedDuringStartup, description, pane)
 	case diagPath != "":
-		return fmt.Errorf("%w: session %q; diagnostic written to %s",
-			runtime.ErrSessionDiedDuringStartup, name, diagPath)
+		return fmt.Errorf("%w: %s; diagnostic written to %s",
+			runtime.ErrSessionDiedDuringStartup, description, diagPath)
 	default:
-		return startupSessionDiedError(name)
+		return fmt.Errorf("%w: %s", runtime.ErrSessionDiedDuringStartup, description)
 	}
 }
 
@@ -1254,7 +1265,7 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 			}
 		}
 		if err := ctx.Err(); err != nil {
-			return ignoreDeadlineIfSessionAlive(ops, name, err)
+			return ignoreDeadlineIfSessionAlive(ops, name, cfg.ProcessNames, err)
 		}
 	}
 
@@ -1264,7 +1275,7 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 	if shouldAcceptStartupDialogs(cfg) {
 		_ = ops.acceptStartupDialogs(ctx, name) // best-effort
 		if err := ctx.Err(); err != nil {
-			return ignoreDeadlineIfSessionAlive(ops, name, err)
+			return ignoreDeadlineIfSessionAlive(ops, name, cfg.ProcessNames, err)
 		}
 	}
 
@@ -1278,6 +1289,9 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 	}
 	if !ops.isSessionRunning(name) {
 		return startupDeadSessionError(ops, name)
+	}
+	if len(cfg.ProcessNames) > 0 && !ops.isRuntimeRunning(name, cfg.ProcessNames) {
+		return startupMissingAgentError(ops, name)
 	}
 
 	// Step 5.5: Run session setup commands and script.
