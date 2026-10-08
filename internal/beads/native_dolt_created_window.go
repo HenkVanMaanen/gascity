@@ -8,14 +8,14 @@ import (
 	beadslib "github.com/steveyegge/beads"
 )
 
-func nativeSearchCreatedWindow(ctx context.Context, filter beadslib.IssueFilter,
+func nativeSearchCreatedWindow(ctx context.Context, limit int, filter beadslib.IssueFilter,
 	recent func(context.Context, int) ([]time.Time, error),
 	search func(context.Context, beadslib.IssueFilter) ([]*beadslib.Issue, error),
 ) ([]*beadslib.Issue, error) {
-	if filter.Limit <= 0 || filter.Limit > 4096 {
+	if limit <= 0 || limit > 4096 {
 		return search(ctx, filter)
 	}
-	window := 2 * filter.Limit
+	window := 2 * limit
 	for range 3 {
 		times, err := recent(ctx, window)
 		if err != nil {
@@ -38,7 +38,7 @@ func nativeSearchCreatedWindow(ctx context.Context, filter beadslib.IssueFilter,
 		if err != nil {
 			return nil, err
 		}
-		if len(issues) >= filter.Limit ||
+		if len(issues) >= limit ||
 			(filter.CreatedAfter != nil && !filter.CreatedAfter.Before(cutoff)) {
 			return issues, nil
 		}
@@ -82,12 +82,40 @@ func nativeSearchListIssues(ctx context.Context, storage beadslib.Storage, query
 		return storage.SearchIssues(ctx, "", filter)
 	}
 	accessor, ok := storage.(rawDBGetter)
+	// A created-time range includes every boundary tie, even for exact reads
+	// whose SQL limit must remain zero so ApplyListQuery can order IDs itself.
+	// Reuse the pushdown eligibility checks to exclude client-only filters.
+	eligible := query
+	eligible.AllowBackingCreatedLimit = true
+	limit := nativeCreatedLimitPushdown(eligible)
 	if !ok || accessor.DB() == nil || query.Sort != SortCreatedDesc ||
-		!query.AllowBackingCreatedLimit || query.Label == "" || filter.Limit < 2 {
+		query.Label == "" || len(query.ParentIDs) > 0 || limit <= 0 {
 		return search(ctx, filter)
 	}
-	return nativeSearchCreatedWindow(ctx, filter,
+	searchMatching := func(ctx context.Context, filter beadslib.IssueFilter) ([]*beadslib.Issue, error) {
+		issues, err := search(ctx, filter)
+		if err != nil {
+			return nil, err
+		}
+		// Count only rows List can return. Corrupt metadata or residual filters
+		// must not prematurely satisfy the window and hide older valid matches.
+		matches := make([]*beadslib.Issue, 0, len(issues))
+		for _, issue := range issues {
+			bead, err := beadFromNativeIssue(issue)
+			if isNativeIssueMetadataParseError(err) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if query.Matches(bead) {
+				matches = append(matches, issue)
+			}
+		}
+		return matches, nil
+	}
+	return nativeSearchCreatedWindow(ctx, limit, filter,
 		func(ctx context.Context, limit int) ([]time.Time, error) {
 			return nativeRecentCreatedTimes(ctx, accessor.DB(), limit)
-		}, search)
+		}, searchMatching)
 }

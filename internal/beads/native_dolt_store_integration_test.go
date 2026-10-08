@@ -322,6 +322,47 @@ func TestNativeRecentCreatedTimesAgainstDoltServer(t *testing.T) {
 			t.Fatalf("prefix[%d] = %s, want %s", i, created, want)
 		}
 	}
+	t.Run("exact page preserves boundary ties", func(t *testing.T) {
+		query := ListQuery{Label: "tracking", Limit: 2, Sort: SortCreatedDesc, IncludeClosed: true, TierMode: TierBoth}
+		storage := &nativeDoltWindowStorageSpy{db: db, nativeDoltStorageSpy: &nativeDoltStorageSpy{
+			searchIssues: func(_ context.Context, _ string, filter beadslib.IssueFilter) ([]*beadslib.Issue, error) {
+				if filter.CreatedAfter == nil || filter.Limit != 0 {
+					t.Fatalf("exact search must narrow time without a backing limit: %+v", filter)
+				}
+				var issues []*beadslib.Issue
+				for _, id := range []string{"a", "b", "c", "d"} {
+					issues = append(issues, &beadslib.Issue{ID: id, CreatedAt: base.Add(23 * time.Second), Labels: []string{"tracking"}})
+				}
+				return issues, nil
+			},
+		}}
+		page, err := newNativeDoltStoreForTest(storage).List(query)
+		if err != nil || len(page) != 2 || page[0].ID != "d" || page[1].ID != "c" {
+			t.Fatalf("exact page = %v, %v; want d,c", page, err)
+		}
+	})
+	t.Run("corrupt rows do not prematurely satisfy the window", func(t *testing.T) {
+		query := ListQuery{Label: "tracking", Limit: 2, Sort: SortCreatedDesc, IncludeClosed: true, TierMode: TierBoth}
+		searches := 0
+		storage := &nativeDoltWindowStorageSpy{db: db, nativeDoltStorageSpy: &nativeDoltStorageSpy{
+			searchIssues: func(_ context.Context, _ string, filter beadslib.IssueFilter) ([]*beadslib.Issue, error) {
+				searches++
+				issues := []*beadslib.Issue{
+					{ID: "bad-a", CreatedAt: base.Add(23 * time.Second), Metadata: []byte("{bad")},
+					{ID: "bad-b", CreatedAt: base.Add(22 * time.Second), Metadata: []byte("{bad")},
+					{ID: "good", CreatedAt: base.Add(21 * time.Second), Labels: []string{"tracking"}},
+				}
+				if filter.CreatedAfter == nil {
+					issues = append(issues, &beadslib.Issue{ID: "older", CreatedAt: base, Labels: []string{"tracking"}})
+				}
+				return issues, nil
+			},
+		}}
+		page, err := newNativeDoltStoreForTest(storage).List(query)
+		if err != nil || len(page) != 2 || page[0].ID != "good" || page[1].ID != "older" || searches != 3 {
+			t.Fatalf("corrupt-row page = %v, %v; searches=%d; want good,older after full fallback", page, err, searches)
+		}
+	})
 	if _, err := db.Exec("DROP TABLE wisps"); err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +371,13 @@ func TestNativeRecentCreatedTimesAgainstDoltServer(t *testing.T) {
 		t.Fatalf("legacy schema must fall back to upstream search: %v, %v", got, err)
 	}
 }
+
+type nativeDoltWindowStorageSpy struct {
+	*nativeDoltStorageSpy
+	db *sql.DB
+}
+
+func (s *nativeDoltWindowStorageSpy) DB() *sql.DB { return s.db }
 
 // TestRepairIDDefaultAgainstDoltServer exercises the SHOW COLUMNS-based probe
 // end-to-end against a real dolt sql-server (the same wire protocol the live
