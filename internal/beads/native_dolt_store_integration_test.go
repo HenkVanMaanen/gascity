@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,6 +379,71 @@ type nativeDoltWindowStorageSpy struct {
 }
 
 func (s *nativeDoltWindowStorageSpy) DB() *sql.DB { return s.db }
+
+func TestNativeClosedSummaryProjectionAgainstDoltServer(t *testing.T) {
+	db := startTestDoltServer(t)
+	base := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	for _, plane := range [][2]string{{"issues", "labels"}, {"wisps", "wisp_labels"}} {
+		if _, err := db.Exec("CREATE TABLE " + plane[0] + " (id varchar(64) PRIMARY KEY, title text, status varchar(32), created_at datetime, updated_at datetime, ephemeral boolean, no_history boolean, metadata JSON)"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("CREATE TABLE " + plane[1] + " (issue_id varchar(64), label varchar(128), PRIMARY KEY(issue_id, label))"); err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range []struct{ suffix, status, metadata string }{
+			{"closed", "closed", `{"large_detail":"unused"}`},
+			{"open", "open", `{}`},
+			{"corrupt", "closed", `[]`},
+		} {
+			id := plane[0] + "-" + record.suffix
+			if _, err := db.Exec("INSERT INTO "+plane[0]+" VALUES (?, 'order:digest', ?, ?, ?, false, true, ?)", id, record.status, base, base, record.metadata); err != nil {
+				t.Fatal(err)
+			}
+			for _, label := range []string{"tracking", "order-run:digest", "seq:7"} {
+				if _, err := db.Exec("INSERT INTO "+plane[1]+" VALUES (?, ?)", id, label); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	storage := &nativeDoltWindowStorageSpy{db: db, nativeDoltStorageSpy: &nativeDoltStorageSpy{
+		searchIssues: func(context.Context, string, beadslib.IssueFilter) ([]*beadslib.Issue, error) {
+			return nil, errors.New("unexpected full-record hydration")
+		},
+	}}
+	page, err := newNativeDoltStoreForTest(storage).List(ListQuery{Label: "tracking", Status: "closed", Sort: SortCreatedDesc, TierMode: TierBoth, Live: true, SkipDetails: true})
+	if err != nil || len(page) != 2 {
+		t.Fatalf("closed summaries = %v, %v; want two valid closed records", page, err)
+	}
+	for _, record := range page {
+		if !record.CreatedAt.Equal(base) || len(record.Labels) != 3 || len(record.Metadata) != 0 || record.Title != "order:digest" || !record.NoHistory {
+			t.Fatalf("summary lost required fields or hydrated metadata: %+v", record)
+		}
+	}
+	for _, query := range []ListQuery{
+		{Label: "tracking", Status: "closed", Sort: SortCreatedDesc, TierMode: TierBoth},
+		{Label: "tracking", Status: "closed", Sort: SortCreatedDesc, TierMode: TierBoth, SkipDetails: true, Metadata: map[string]string{"custom": "value"}},
+	} {
+		if _, err := newNativeDoltStoreForTest(storage).List(query); err == nil || !strings.Contains(err.Error(), "unexpected full-record hydration") {
+			t.Fatalf("unsupported summary shape must keep upstream semantics: %v", err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO wisps SELECT * FROM issues WHERE id = 'issues-corrupt'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO wisp_labels SELECT * FROM labels WHERE issue_id = 'issues-corrupt'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, handled, err := nativeReadClosedSummary(context.Background(), db, "tracking"); err != nil || handled {
+		t.Fatalf("overlapping planes must fall back to upstream validation: handled=%v err=%v", handled, err)
+	}
+	if _, err := db.Exec("DROP TABLE wisps"); err != nil {
+		t.Fatal(err)
+	}
+	if _, handled, err := nativeReadClosedSummary(context.Background(), db, "tracking"); err != nil || handled {
+		t.Fatalf("legacy schema must fall back to upstream routing: handled=%v err=%v", handled, err)
+	}
+}
 
 // TestRepairIDDefaultAgainstDoltServer exercises the SHOW COLUMNS-based probe
 // end-to-end against a real dolt sql-server (the same wire protocol the live

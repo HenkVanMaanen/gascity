@@ -82,6 +82,12 @@ func nativeSearchListIssues(ctx context.Context, storage beadslib.Storage, query
 		return storage.SearchIssues(ctx, "", filter)
 	}
 	accessor, ok := storage.(rawDBGetter)
+	if ok && accessor.DB() != nil && nativeCanReadClosedSummary(query) {
+		issues, handled, err := nativeReadClosedSummary(ctx, accessor.DB(), query.Label)
+		if handled || err != nil {
+			return issues, err
+		}
+	}
 	// A created-time range includes every boundary tie, even for exact reads
 	// whose SQL limit must remain zero so ApplyListQuery can order IDs itself.
 	// Reuse the pushdown eligibility checks to exclude client-only filters.
