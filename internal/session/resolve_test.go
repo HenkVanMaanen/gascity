@@ -841,12 +841,15 @@ func TestResolveSessionID_BoundedListCalls(t *testing.T) {
 	if len(store.listCalls) == 0 {
 		t.Fatalf("expected at least one List call")
 	}
-	if len(store.listCalls) != 2 {
-		t.Fatalf("List calls = %d, want 2", len(store.listCalls))
+	if len(store.listCalls) != 4 {
+		t.Fatalf("List calls = %d, want two indexed union legs per metadata lookup", len(store.listCalls))
 	}
 	for i, q := range store.listCalls {
 		if len(q.Metadata) == 0 {
 			t.Fatalf("List call #%d has no metadata filter (would scan all beads): %+v", i, q)
+		}
+		if q.Type != session.BeadType && q.Label != session.LabelSession {
+			t.Fatalf("List call #%d does not narrow to session indexes: %+v", i, q)
 		}
 	}
 }

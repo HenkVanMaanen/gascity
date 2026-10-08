@@ -81,8 +81,8 @@ func TestResolveConfiguredNamedSessionID_BoundedListCalls(t *testing.T) {
 	if len(store.listCalls) == 0 {
 		t.Fatalf("expected at least one List call")
 	}
-	if len(store.listCalls) != 1 {
-		t.Fatalf("List calls = %d, want 1 canonical lookup", len(store.listCalls))
+	if len(store.listCalls) != 2 {
+		t.Fatalf("List calls = %d, want two indexed legs for one canonical lookup", len(store.listCalls))
 	}
 	for i, q := range store.listCalls {
 		if len(q.Metadata) == 0 {
@@ -137,7 +137,7 @@ func TestResolveConfiguredNamedSessionID_BoundedConflictListCalls(t *testing.T) 
 	if len(store.listCalls) == 0 {
 		t.Fatalf("expected at least one List call")
 	}
-	if len(store.listCalls) > 4 {
+	if len(store.listCalls) > 8 {
 		t.Fatalf("List calls = %d, want bounded small constant without duplicate session_name lookup", len(store.listCalls))
 	}
 	for i, q := range store.listCalls {

@@ -482,12 +482,15 @@ func TestLookupConfiguredNamedSession_BoundedConflictQueries(t *testing.T) {
 	if lookup.Conflict.ID != conflict.ID {
 		t.Fatalf("Conflict.ID = %q, want %q", lookup.Conflict.ID, conflict.ID)
 	}
-	if len(store.queries) > 4 {
+	if len(store.queries) > 8 {
 		t.Fatalf("List calls = %d, want bounded small constant without duplicate session_name lookup", len(store.queries))
 	}
 	for i, query := range store.queries {
 		if len(query.Metadata) == 0 {
 			t.Fatalf("query #%d has no metadata filter: %+v", i, query)
+		}
+		if query.Type != BeadType && query.Label != LabelSession {
+			t.Fatalf("query #%d does not narrow to session indexes: %+v", i, query)
 		}
 	}
 }

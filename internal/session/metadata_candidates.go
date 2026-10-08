@@ -69,7 +69,7 @@ func exactMetadataSessionCandidates(store beads.Store, includeClosed bool, statu
 		} else {
 			query.IncludeClosed = includeClosed
 		}
-		items, err := store.List(query)
+		items, err := ListAllSessionBeads(store, query)
 		if err != nil {
 			return nil, err
 		}

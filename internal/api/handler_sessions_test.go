@@ -5231,8 +5231,8 @@ func TestResolveConfiguredNamedSessionIDWithContext_BoundedListCalls(t *testing.
 	if id != target.ID {
 		t.Fatalf("id = %q, want canonical %q", id, target.ID)
 	}
-	if len(store.listCalls) != 1 {
-		t.Fatalf("List calls = %d, want 1 canonical lookup", len(store.listCalls))
+	if len(store.listCalls) != 2 {
+		t.Fatalf("List calls = %d, want two indexed legs for one canonical lookup", len(store.listCalls))
 	}
 	assertSessionResolverMetadataFilteredListCalls(t, store.listCalls)
 }
@@ -5273,7 +5273,7 @@ func TestResolveConfiguredNamedSessionIDWithContext_BoundedConflictListCalls(t *
 	if !errors.Is(err, errConfiguredNamedSessionConflict) {
 		t.Fatalf("error = %v, want errConfiguredNamedSessionConflict", err)
 	}
-	if len(store.listCalls) > 4 {
+	if len(store.listCalls) > 8 {
 		t.Fatalf("List calls = %d, want bounded small constant without duplicate session_name lookup", len(store.listCalls))
 	}
 	assertSessionResolverMetadataFilteredListCalls(t, store.listCalls)
@@ -5287,6 +5287,9 @@ func assertSessionResolverMetadataFilteredListCalls(t *testing.T, calls []beads.
 	for i, query := range calls {
 		if len(query.Metadata) == 0 {
 			t.Fatalf("List call #%d has no metadata filter (would scan broad bead sets): %+v", i, query)
+		}
+		if query.Type != session.BeadType && query.Label != session.LabelSession {
+			t.Fatalf("List call #%d does not narrow to session indexes: %+v", i, query)
 		}
 	}
 }

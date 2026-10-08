@@ -393,7 +393,7 @@ func listConfiguredNamedSessionBeadsByMetadata(store beads.Store, key, value str
 	if key == "" || value == "" {
 		return nil, nil
 	}
-	items, err := store.List(beads.ListQuery{
+	items, err := ListAllSessionBeads(store, beads.ListQuery{
 		Metadata: map[string]string{key: value},
 	})
 	if err != nil {
