@@ -270,11 +270,16 @@ func (c *CachingStore) refreshCachedBeads(query ListQuery, startSeq uint64, item
 				continue
 			}
 		}
-		c.absorbFreshLocked(item.ID, item, now, absorbOpts{
-			depsMode:   depsFromFieldsIfCarried,
-			seqMode:    seqClearGuarded,
-			clearDirty: true,
-		})
+		// Summary projections may omit text and dependencies. They participate
+		// in the live-read mutation guards above, but cannot replace a complete
+		// cached record or mark its omitted dependency projection as fresh.
+		if !query.SkipDetails {
+			c.absorbFreshLocked(item.ID, item, now, absorbOpts{
+				depsMode:   depsFromFieldsIfCarried,
+				seqMode:    seqClearGuarded,
+				clearDirty: true,
+			})
+		}
 		if query.Matches(item) {
 			refreshed = append(refreshed, cloneBead(item))
 		}

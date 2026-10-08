@@ -103,6 +103,7 @@ func (s *Store) RecentRunsAll(limit int) ([]OrderRun, error) {
 		// irrelevant. Opt into the bounded backing limit to keep the fetch off
 		// the full retained corpus (sr-dp9o).
 		AllowBackingCreatedLimit: true,
+		SkipDetails:              true,
 	})
 	return decodeTrackingRuns(list), err
 }
@@ -117,9 +118,10 @@ func (s *Store) OpenRuns() ([]OrderRun, error) {
 		return nil, nil
 	}
 	list, err := beads.HandlesFor(s.store.Store).Live.List(beads.ListQuery{
-		Label:  labelOrderTracking,
-		Status: "open",
-		Sort:   beads.SortCreatedDesc,
+		Label:       labelOrderTracking,
+		Status:      "open",
+		Sort:        beads.SortCreatedDesc,
+		SkipDetails: true,
 	})
 	return decodeTrackingRuns(list), err
 }
@@ -187,10 +189,11 @@ func (s *Store) ClosedRunsForRetention() ([]OrderRun, error) {
 		return nil, nil
 	}
 	list, err := beads.HandlesFor(s.store.Store).Live.List(beads.ListQuery{
-		Status:   "closed",
-		Label:    labelOrderTracking,
-		Sort:     beads.SortCreatedDesc,
-		TierMode: beads.TierBoth,
+		Status:      "closed",
+		Label:       labelOrderTracking,
+		Sort:        beads.SortCreatedDesc,
+		TierMode:    beads.TierBoth,
+		SkipDetails: true,
 	})
 	if err != nil {
 		return nil, err

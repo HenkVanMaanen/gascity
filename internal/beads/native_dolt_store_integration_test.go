@@ -281,12 +281,54 @@ func startTestDoltServer(t *testing.T) *sql.DB {
 	}
 	_ = db.Close()
 
-	db, err = sql.Open("mysql", dsn+"repairtest")
+	db, err = sql.Open("mysql", dsn+"repairtest?parseTime=true")
 	if err != nil {
 		t.Fatalf("open test database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+// TestNativeRecentCreatedTimesAgainstDoltServer proves the bounded SQL prefix
+// merges both storage planes and decodes timestamps over the real MySQL wire.
+func TestNativeRecentCreatedTimesAgainstDoltServer(t *testing.T) {
+	db := startTestDoltServer(t)
+	ctx := context.Background()
+	base := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	for _, table := range []string{"issues", "wisps"} {
+		if _, err := db.Exec("CREATE TABLE " + table + " (id int PRIMARY KEY, created_at datetime NOT NULL, INDEX idx_created(created_at))"); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 12 {
+			offset := 2 * i
+			if table == "wisps" {
+				offset++
+			}
+			if _, err := db.Exec("INSERT INTO "+table+" VALUES (?, ?)", i, base.Add(time.Duration(offset)*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	got, err := nativeRecentCreatedTimes(ctx, db, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("prefix length = %d, want 4", len(got))
+	}
+	for i, created := range got {
+		want := base.Add(time.Duration(23-i) * time.Second)
+		if !created.Equal(want) {
+			t.Fatalf("prefix[%d] = %s, want %s", i, created, want)
+		}
+	}
+	if _, err := db.Exec("DROP TABLE wisps"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = nativeRecentCreatedTimes(ctx, db, 4)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("legacy schema must fall back to upstream search: %v, %v", got, err)
+	}
 }
 
 // TestRepairIDDefaultAgainstDoltServer exercises the SHOW COLUMNS-based probe

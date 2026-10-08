@@ -21,6 +21,28 @@ type listSpyStore struct {
 	queries []beads.ListQuery
 }
 
+func TestTrackingSummaryReadsRequestLiveSummaryProjection(t *testing.T) {
+	spy := &listSpyStore{Store: beads.NewMemStore()}
+	store := NewStore(beads.OrdersStore{Store: spy})
+	if _, err := store.RecentRunsAll(256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.OpenRuns(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClosedRunsForRetention(); err != nil {
+		t.Fatal(err)
+	}
+	if len(spy.queries) != 3 {
+		t.Fatalf("summary read queries = %d, want 3", len(spy.queries))
+	}
+	for _, query := range spy.queries {
+		if !query.SkipDetails || !query.Live {
+			t.Fatalf("summary query must bypass cached complete records: %+v", query)
+		}
+	}
+}
+
 func (s *listSpyStore) List(q beads.ListQuery) ([]beads.Bead, error) {
 	s.queries = append(s.queries, q)
 	return s.Store.List(q)

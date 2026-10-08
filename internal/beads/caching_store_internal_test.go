@@ -311,6 +311,22 @@ func TestCachingStoreListLiveBypassesCache(t *testing.T) {
 	}
 }
 
+func TestCachingStoreSummaryReadDoesNotEraseCompleteCachedRecord(t *testing.T) {
+	cache := NewCachingStoreForTest(NewMemStore(), nil)
+	complete := Bead{ID: "work", Title: "work", Status: "open", Description: "keep this body"}
+	cache.state = cacheLive
+	cache.beads[complete.ID] = complete
+	partial := complete
+	partial.Description = ""
+	rows := cache.refreshCachedBeads(ListQuery{Status: "open", Live: true, SkipDetails: true}, 0, []Bead{partial})
+	if len(rows) != 1 || rows[0].ID != complete.ID {
+		t.Fatalf("summary read = %+v, want work", rows)
+	}
+	if cached := cache.beads[complete.ID]; cached.Description != complete.Description {
+		t.Fatalf("summary read erased cached body: %+v", cached)
+	}
+}
+
 func TestCachingStoreListLiveInvalidatesCachedRowsMissingFromBacking(t *testing.T) {
 	t.Parallel()
 

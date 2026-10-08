@@ -91,6 +91,11 @@ type ListQuery struct {
 	// caller does not need labels for change detection. Stores that cannot
 	// omit labels may ignore it.
 	SkipLabels bool
+	// SkipDetails allows a backing store to omit large text fields and dependency
+	// hydration. Use only for live summary reads whose consumers need identifiers,
+	// labels, status and timestamps; the returned beads are not complete records.
+	// Backends that do not support this projection may return complete records.
+	SkipDetails bool
 	// Live bypasses CachingStore and reads from the backing store. Other Store
 	// implementations ignore it. Use it only for lifecycle gates that must
 	// observe external mutations immediately.
