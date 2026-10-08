@@ -1927,13 +1927,23 @@ func TestBeadsStoreCheck_ManagedCityMissingRuntimeStateFailsBeforePing(t *testin
 
 func TestBeadsStoreCheck_ExternalCityUnavailableFailsBeforePing(t *testing.T) {
 	dir := setupCity(t, "[workspace]\nname = \"test\"\n")
+	// A fixed port can belong to a live local Dolt server. Allocate and close
+	// a fixture port so this check exercises an unavailable endpoint.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close listener: %v", err)
+	}
 	fs := fsys.OSFS{}
 	writeDoctorCanonicalConfig(t, fs, dir, contract.ConfigState{
 		IssuePrefix:    "gc",
 		EndpointOrigin: contract.EndpointOriginCityCanonical,
 		EndpointStatus: contract.EndpointStatusUnverified,
 		DoltHost:       "127.0.0.1",
-		DoltPort:       "4416",
+		DoltPort:       port,
 	})
 	writeDoctorCanonicalMetadata(t, fs, dir, "hq")
 
@@ -1947,7 +1957,7 @@ func TestBeadsStoreCheck_ExternalCityUnavailableFailsBeforePing(t *testing.T) {
 	if r.Status != StatusError {
 		t.Fatalf("status = %d, want Error; msg = %s", r.Status, r.Message)
 	}
-	if !strings.Contains(r.Message, "dolt server not reachable at 127.0.0.1:4416") {
+	if !strings.Contains(r.Message, "dolt server not reachable at 127.0.0.1:"+port) {
 		t.Fatalf("message = %q, want normalized reachability error", r.Message)
 	}
 	if !strings.Contains(r.FixHint, "external") {
